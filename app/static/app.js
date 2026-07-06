@@ -12,7 +12,9 @@ const S = { view: "live", vessels: [], watch: [], heat: null, net: null,
 
 function resize() {
   DPR = Math.min(2, window.devicePixelRatio || 1);
-  W = cv.clientWidth; H = cv.clientHeight;
+  W = cv.clientWidth || window.innerWidth;
+  H = cv.clientHeight || window.innerHeight;
+  if (!W || !H) { requestAnimationFrame(resize); return; }
   cv.width = W * DPR; cv.height = H * DPR;
   const sx = W / (FRAME.lon1 - FRAME.lon0);
   const sy = H / (FRAME.lat1 - FRAME.lat0);
@@ -264,6 +266,7 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
 });
 
 window.addEventListener("resize", resize);
-api("/static/basemap.json").then(b => { S.base = b; draw(); });
+window.addEventListener("load", resize);
+api("/static/basemap.json").then(b => { S.base = b; resize(); draw(); });
 resize(); tick();
 setInterval(tick, 5000);
