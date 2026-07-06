@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>GHOST FLEET</title>
+<style>
+  :root{
+    --sea:#0a2233; --sea2:#0e3350; --land:#13212b; --coast:#2b5773;
+    --ink:#dce8f0; --dim:#7fa0b4; --hot:#ff3b30; --warm:#ffb020; --calm:#3aa0ff;
+    --sanc:#ff2d55; --panel:rgba(8,20,30,.92); --line:#1d3a4f;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--sea);color:var(--ink);
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;overflow:hidden;
+    -webkit-font-smoothing:antialiased}
+  #map{position:fixed;inset:0;display:block;touch-action:none}
+  .top{position:fixed;top:0;left:0;right:0;height:52px;display:flex;align-items:center;
+    gap:18px;padding:0 16px;background:linear-gradient(180deg,rgba(4,12,20,.95),rgba(4,12,20,0));
+    z-index:5;pointer-events:none}
+  .brand{font-weight:700;letter-spacing:.22em;font-size:15px}
+  .brand b{color:var(--hot)}
+  .tabs{display:flex;gap:4px;pointer-events:auto}
+  .tab{padding:5px 12px;font-size:11px;letter-spacing:.12em;color:var(--dim);
+    border:1px solid transparent;border-radius:4px;cursor:pointer;background:rgba(255,255,255,.03)}
+  .tab.on{color:var(--ink);border-color:var(--coast);background:rgba(58,160,255,.12)}
+  .stat{display:flex;gap:16px;margin-left:auto;font-size:11px;color:var(--dim);
+    pointer-events:none}
+  .stat b{color:var(--ink);font-weight:600}
+  .stat .m0{color:var(--warm)}
+  .rail{position:fixed;top:60px;right:12px;width:310px;max-height:calc(100vh - 74px);
+    overflow-y:auto;z-index:4;display:flex;flex-direction:column;gap:6px}
+  .card{background:var(--panel);border:1px solid #163044;border-left:3px solid var(--warm);
+    border-radius:5px;padding:8px 10px;cursor:pointer;backdrop-filter:blur(6px)}
+  .card.sanc{border-left-color:var(--sanc)}
+  .card .h{display:flex;justify-content:space-between;font-size:12px;font-weight:600}
+  .card .h .sc{color:var(--warm)}
+  .card.sanc .h .sc{color:var(--sanc)}
+  .card .w{font-size:10.5px;color:var(--dim);margin-top:3px;line-height:1.5}
+  .railhead{font-size:10px;letter-spacing:.18em;color:var(--dim);padding:2px 2px 0}
+  .dossier{position:fixed;left:12px;bottom:12px;width:360px;max-height:70vh;overflow-y:auto;
+    background:var(--panel);border:1px solid #1b3c54;border-radius:7px;padding:14px 16px;
+    z-index:6;display:none;backdrop-filter:blur(8px)}
+  .dossier.show{display:block}
+  .dossier h2{margin:0 0 2px;font-size:15px;letter-spacing:.06em}
+  .dossier .sub{font-size:11px;color:var(--dim);margin-bottom:10px}
+  .dossier .score{font-size:26px;font-weight:700}
+  .dossier .badge{display:inline-block;padding:2px 8px;border-radius:3px;font-size:10px;
+    letter-spacing:.1em;background:var(--sanc);color:#fff;margin-left:8px;vertical-align:middle}
+  .dossier .row{display:flex;justify-content:space-between;font-size:11.5px;padding:3px 0;
+    border-bottom:1px solid #12293a}
+  .dossier .row span:first-child{color:var(--dim)}
+  .dossier ul{margin:8px 0;padding-left:16px;font-size:11.5px;color:#cfe0ec}
+  .dossier ul li{margin:3px 0}
+  .dossier a{color:var(--calm);text-decoration:none;font-size:11px;margin-right:12px}
+  .dossier .x{position:absolute;top:8px;right:12px;color:var(--dim);cursor:pointer;font-size:16px}
+  .legend{position:fixed;left:12px;top:60px;z-index:4;background:var(--panel);
+    border:1px solid #163044;border-radius:5px;padding:8px 10px;font-size:10px;color:var(--dim)}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+  .note{position:fixed;bottom:8px;right:14px;font-size:9.5px;color:#4a6579;z-index:3;letter-spacing:.08em}
+</style>
+</head>
+<body>
+<canvas id="map"></canvas>
+<div class="top">
+  <div class="brand">GHOST&nbsp;<b>FLEET</b></div>
+  <div class="tabs">
+    <div class="tab on" data-v="live">LIVE</div>
+    <div class="tab" data-v="heat">HEATMAP</div>
+    <div class="tab" data-v="net">NETWORK</div>
+  </div>
+  <div class="stat">
+    <div>TRACKED <b id="s-tracked">0</b></div>
+    <div>SANCTIONED&nbsp;LIVE <b id="s-sanc" class="m0">0</b></div>
+    <div>SCORED <b id="s-scored">0</b></div>
+    <div id="s-model" style="color:#4a6579">MODEL OFFLINE</div>
+  </div>
+</div>
+<div class="legend" id="legend">
+  <div><i style="background:#3aa0ff"></i>calm traffic</div>
+  <div><i style="background:#ffb020"></i>rising suspicion</div>
+  <div><i style="background:#ff3b30"></i>high suspicion</div>
+  <div><i style="background:#ff2d55;border-radius:2px"></i>on sanctions list</div>
+</div>
+<div class="railhead" style="position:fixed;top:60px;right:12px;z-index:5">ATTENTION</div>
+<div class="rail" id="rail" style="margin-top:16px"></div>
+<div class="dossier" id="dossier"></div>
+<div class="note" id="note">coordination &amp; evasion signal, not proof of a crime</div>
+<script>window.__BASE__="__BASE__";</script>
+<script src="__BASE__/static/app.js"></script>
+</body>
+</html>
