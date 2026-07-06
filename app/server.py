@@ -215,7 +215,7 @@ def index():
     html = (STATIC / "index.html").read_text()
     v = str(int((STATIC / "app.js").stat().st_mtime))
     html = html.replace("app.js", f"app.js?v={v}")
-    return HTMLResponse(html.replace("__BASE__", BASE),
+    return HTMLResponse(html.replace("%%BASE%%", BASE),
                         headers={"Cache-Control": "no-cache"})
 
 
