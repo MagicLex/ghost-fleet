@@ -140,8 +140,15 @@ def _sanctioned_row(r):
 # --- live AIS reader -----------------------------------------------------
 async def ais_loop():
     import hopsworks
-    key = hopsworks.get_secrets_api().get_secret("AISSTREAM_KEY").value
-    loop = asyncio.get_event_loop()
+    # the app has its OWN aisstream key so it never fights the collector job for
+    # aisstream's single-connection-per-key limit
+    try:
+        hopsworks.login()
+        key = hopsworks.get_secrets_api().get_secret("AISSTREAM_KEY_APP").value
+    except Exception as e:
+        print(f"ais_loop: cannot read key: {e}", flush=True)
+        return
+    print("ais_loop: connecting to aisstream", flush=True)
 
     def run():
         for row in stream_rows(key, run_seconds=10 ** 9):
