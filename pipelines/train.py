@@ -124,7 +124,8 @@ def main():
 
 def _register(proj, model, X, y, oof, metrics):
     import joblib
-    from sklearn.metrics import PrecisionRecallDisplay
+    from sklearn.metrics import (PrecisionRecallDisplay, RocCurveDisplay,
+                                 ConfusionMatrixDisplay, precision_recall_curve)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -143,6 +144,19 @@ def _register(proj, model, X, y, oof, metrics):
     plt.title(f"shadow_vessel PR (AP={metrics['cv_pr_auc']}, "
               f"lift x{metrics['lift_over_blind']} vs blind)")
     plt.savefig(os.path.join(img, "pr_curve.png"), dpi=110, bbox_inches="tight")
+    plt.close()
+    RocCurveDisplay.from_predictions(y, oof)
+    plt.title(f"shadow_vessel ROC (AUC={metrics['cv_roc_auc']})")
+    plt.savefig(os.path.join(img, "roc_curve.png"), dpi=110, bbox_inches="tight")
+    plt.close()
+    # confusion at the best-F1 operating point on the out-of-fold scores
+    prec, rec, thr = precision_recall_curve(y, oof)
+    f1 = 2 * prec * rec / (prec + rec + 1e-9)
+    best = int(np.argmax(f1[:-1])) if len(thr) else 0
+    t = float(thr[best]) if len(thr) else 0.5
+    ConfusionMatrixDisplay.from_predictions(y, (oof >= t).astype(int))
+    plt.title(f"shadow_vessel confusion @ t={t:.2f} (F1={f1[best]:.2f})")
+    plt.savefig(os.path.join(img, "confusion.png"), dpi=110, bbox_inches="tight")
     plt.close()
     imp = getattr(model, "feature_importances_", None)
     if imp is None:
