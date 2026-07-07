@@ -119,21 +119,6 @@ def _is_sanctioned_mmsi(mmsi):
     return bool(imo and imo in ENRICH["sanctioned"])
 
 
-def _corridor():
-    """Live positions of sanctioned / high-score vessels = where the shadow
-    fleet actually transits (weighted by suspicion)."""
-    pts = []
-    now = time.time()
-    for m, r in VESSELS.items():
-        if now - r["ts"] > 300:
-            continue
-        s = (SCORE.get(m) or {}).get("score")
-        w = s if s is not None else (0.8 if _sanctioned_row(r) else 0.0)
-        if w and w > 0.4:
-            pts.append([round(r["lat"], 3), round(r["lon"], 3), round(float(w), 2)])
-    return pts
-
-
 def _sanctioned_row(r):
     imo = str(r.get("imo") or "")
     return bool(imo and imo in ENRICH["sanctioned"])
@@ -298,7 +283,17 @@ def _watch(now):
 
 @app.get("/api/heatmap")
 def heatmap():
-    return {"dark": HEAT["dark"], "corridor": _corridor(),
+    """Where shadow-fleet behaviour concentrates: GFW AIS-gap + loitering + STS
+    events (stable), plus the vessels currently gone dark. One legible layer."""
+    now = time.time()
+    darkpts = []
+    for m, r in VESSELS.items():
+        age = now - r["ts"]
+        if LIVE_S < age <= DARK_S:
+            sc = SCORE.get(m) or {}
+            if _sanctioned_row(r) or (r.get("flag") or "") in FOC_FLAGS or (sc.get("score") or 0) >= 0.5:
+                darkpts.append([round(r["lat"], 3), round(r["lon"], 3), 3.0])
+    return {"dark": HEAT["dark"] + darkpts,
             "hotspots": [[la, lo, r] for la, lo, r in STS_HOTSPOTS]}
 
 

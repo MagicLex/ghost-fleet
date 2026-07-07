@@ -58,6 +58,14 @@
   .legend{position:fixed;left:12px;top:60px;z-index:4;background:var(--panel);
     border:1px solid #163044;border-radius:5px;padding:8px 10px;font-size:10px;color:var(--dim)}
   .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+  .card.dark{border-left-color:#ff963c}
+  .card.dark .h .sc{color:#ff963c}
+  .heatlegend{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:4;
+    background:var(--panel);border:1px solid #163044;border-radius:6px;padding:8px 12px;
+    display:none;width:264px;backdrop-filter:blur(6px)}
+  .hl-bar{height:11px;border-radius:3px;
+    background:linear-gradient(90deg,#102e4a,#3aa0ff,#50c8ac,#ffb020,#ff3b30,#fff0cd)}
+  .hl-lab{display:flex;justify-content:space-between;font-size:9px;color:var(--dim);margin-top:4px}
   .note{position:fixed;bottom:8px;right:14px;font-size:9.5px;color:#4a6579;z-index:3;letter-spacing:.08em}
 </style>
 </head>
@@ -74,6 +82,7 @@
     <div>TRACKED <b id="s-tracked">0</b></div>
     <div>SANCTIONED&nbsp;LIVE <b id="s-sanc" class="m0">0</b></div>
     <div>SCORED <b id="s-scored">0</b></div>
+    <div>DARK <b id="s-dark" style="color:#ff963c">0</b></div>
     <div>UTC <b id="s-clock">--:--:--</b></div>
     <div id="s-model" style="color:#4a6579">MODEL OFFLINE</div>
   </div>
@@ -83,6 +92,14 @@
   <div><i style="background:#ffb020"></i>rising suspicion</div>
   <div><i style="background:#ff3b30"></i>high suspicion</div>
   <div><i style="background:#ff2d55;border-radius:2px"></i>on sanctions list</div>
+  <div><i style="background:#ff963c;border-radius:0"></i>went dark (AIS lost)</div>
+</div>
+<div class="heatlegend" id="heatlegend">
+  <div class="hl-lab" style="margin-bottom:5px;color:#9fb8c8;letter-spacing:.14em">SHADOW ACTIVITY DENSITY</div>
+  <div class="hl-bar"></div>
+  <div class="hl-lab"><span>sparse</span><span>hot</span></div>
+  <div style="font-size:8.5px;color:#5f7f94;margin-top:4px;line-height:1.4">
+    where ships go dark, loiter &amp; do ship-to-ship transfers</div>
 </div>
 <div class="railwrap">
   <div class="railhead">ATTENTION</div>

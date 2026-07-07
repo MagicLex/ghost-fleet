@@ -7,7 +7,7 @@ const cv = document.getElementById("map"), cx = cv.getContext("2d");
 const FRAME = { lon0: 9, lon1: 30.5, lat0: 53.3, lat1: 61.0 };
 let cam = { cx: (FRAME.lon0 + FRAME.lon1) / 2, cy: (FRAME.lat0 + FRAME.lat1) / 2, scale: 1 };
 let DPR = 1, W = 0, H = 0;
-const S = { view: "live", vessels: [], watch: [], heat: null, net: null,
+const S = { view: "live", vessels: [], watch: [], heat: null, net: null, dark: [],
             sel: null, trail: [], base: null, netSel: null, netHover: null };
 
 function resize() {
@@ -55,30 +55,83 @@ function lerp(a, b, t) {
 function draw() {
   cx.save(); cx.scale(DPR, DPR);
   const g = cx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, "#0a2233"); g.addColorStop(1, "#071722");
+  g.addColorStop(0, "#081c2b"); g.addColorStop(1, "#040f18");
   cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+  if (S.view === "net") { drawNetwork(); cx.restore(); return; }
+  drawGraticule();
   drawBase();
   if (S.view === "heat") drawHeat();
-  if (S.view === "net") { drawNetwork(); cx.restore(); return; }
-  if (S.view === "live" || S.view === "heat") drawVessels();
+  drawVessels();
   if (S.trail.length) drawTrail();
+  if (S.dark && S.dark.length) drawDark();
+  drawVignette();
   cx.restore();
 }
 
+const RU_OIL = { "Primorsk": 1, "Ust-Luga": 1, "Vysotsk": 1 };  // shadow-fleet loading terminals
+function landPath(poly) {
+  cx.beginPath();
+  poly.forEach((p, i) => { const q = proj(p[0], p[1]); i ? cx.lineTo(q.x, q.y) : cx.moveTo(q.x, q.y); });
+  cx.closePath();
+}
 function drawBase() {
   const b = S.base; if (!b) return;
-  cx.lineJoin = "round";
-  (b.land || []).forEach(poly => {
-    cx.beginPath();
-    poly.forEach((p, i) => { const q = proj(p[0], p[1]); i ? cx.lineTo(q.x, q.y) : cx.moveTo(q.x, q.y); });
-    cx.closePath(); cx.fillStyle = "#12212b"; cx.fill();
+  cx.lineJoin = cx.lineCap = "round";
+  const land = b.land || [];
+  land.forEach(poly => { landPath(poly); cx.fillStyle = "#12211c"; cx.fill(); });  // terrain-green land
+  cx.strokeStyle = "rgba(78,168,200,.13)"; cx.lineWidth = 4;                        // soft coast halo
+  land.forEach(poly => { landPath(poly); cx.stroke(); });
+  cx.strokeStyle = "rgba(132,206,230,.6)"; cx.lineWidth = 1;                        // crisp coastline
+  land.forEach(poly => { landPath(poly); cx.stroke(); });
+  (b.ports || []).forEach(p => {
+    const q = proj(p[0], p[1]);
+    if (q.x < -40 || q.x > W + 40 || q.y < -20 || q.y > H + 20) return;
+    const oil = RU_OIL[p[2]], c = oil ? "255,176,32" : "127,208,232";
+    cx.fillStyle = `rgb(${c})`; cx.beginPath(); cx.arc(q.x, q.y, oil ? 3.2 : 2.4, 0, 7); cx.fill();
+    cx.strokeStyle = `rgba(${c},.45)`; cx.lineWidth = 1;
+    cx.beginPath(); cx.arc(q.x, q.y, oil ? 6 : 4.5, 0, 7); cx.stroke();
+    cx.fillStyle = oil ? "rgba(255,205,120,.92)" : "rgba(160,205,225,.8)";
+    cx.font = (oil ? "9.5px" : "9px") + " monospace";
+    cx.fillText(p[2], q.x + 7, q.y + 3);
   });
-  cx.strokeStyle = "#274d66"; cx.lineWidth = 0.7;
-  (b.coast || []).forEach(line => {
-    cx.beginPath();
-    line.forEach((p, i) => { const q = proj(p[0], p[1]); i ? cx.lineTo(q.x, q.y) : cx.moveTo(q.x, q.y); });
-    cx.stroke();
-  });
+}
+
+function drawGraticule() {
+  cx.strokeStyle = "rgba(70,120,150,.09)"; cx.lineWidth = 1;
+  cx.fillStyle = "rgba(120,160,190,.28)"; cx.font = "9px monospace";
+  for (let lon = 0; lon <= 40; lon += 2) {
+    const a = proj(lon, cam.cy); if (a.x < 24 || a.x > W) continue;
+    cx.beginPath(); cx.moveTo(a.x, 0); cx.lineTo(a.x, H); cx.stroke();
+    cx.fillText(lon + "°E", a.x + 2, H - 20);
+  }
+  for (let lat = 48; lat <= 66; lat += 1) {
+    const a = proj(cam.cx, lat); if (a.y < 40 || a.y > H) continue;
+    cx.beginPath(); cx.moveTo(0, a.y); cx.lineTo(W, a.y); cx.stroke();
+    cx.fillText(lat + "°N", 4, a.y - 3);
+  }
+}
+
+function drawVignette() {
+  const g = cx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.36, W / 2, H / 2, Math.max(W, H) * 0.72);
+  g.addColorStop(0, "rgba(0,0,0,0)"); g.addColorStop(1, "rgba(2,8,14,.5)");
+  cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+}
+
+// vessels that went dark: ghost markers pulsing at last known position (the thesis)
+function drawDark() {
+  const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 1000 * 2.2);
+  cx.font = "10px monospace";
+  for (const v of S.dark) {
+    const q = proj(v.lo, v.la);
+    if (q.x < -20 || q.x > W + 20 || q.y < -20 || q.y > H + 20) continue;
+    const c = v.sanc ? "255,45,85" : "255,150,60";
+    cx.setLineDash([3, 3]); cx.strokeStyle = `rgba(${c},${0.2 + 0.5 * pulse})`; cx.lineWidth = 1.4;
+    cx.beginPath(); cx.arc(q.x, q.y, 7 + 6 * pulse, 0, 7); cx.stroke(); cx.setLineDash([]);
+    cx.strokeStyle = `rgba(${c},.95)`; cx.lineWidth = 1.6;
+    cx.beginPath(); cx.arc(q.x, q.y, 4, 0, 7); cx.stroke();
+    cx.fillStyle = `rgba(${c},.95)`;
+    cx.fillText("DARK " + Math.round(v.dark_min) + "m", q.x + 9, q.y + 3);
+  }
 }
 
 function drawVessels() {
@@ -149,8 +202,7 @@ function drawHeat() {
       if (d2 <= r2) acc[y * gw + x] += wt * Math.exp(-d2 / (r2 * 0.35));
     }
   });
-  splat(h.dark, 1.0, 9);
-  splat(h.corridor, 1.3, 7);
+  splat(h.dark, 1.0, 9);            // one stable layer: AIS gaps + loitering + STS
   let mx = 0; for (let i = 0; i < acc.length; i++) if (acc[i] > mx) mx = acc[i];
   if (mx > 0) {
     if (!heatBuf) heatBuf = document.createElement("canvas");
@@ -186,6 +238,43 @@ function netColor(v) {
   return lerp("#ffb020", "#ff3b30", (s - 0.5) / 0.5);
 }
 const nodeRadius = v => (v.sanc ? 7 : 4) + Math.min(7, v.deg || 0) + (v.score ? v.score * 4 : 0);
+// force-directed layout: positions persist across polls in NP so the graph keeps
+// its shape and gently settles (gravity + repulsion + edge springs).
+const NP = {};
+function simulateNet() {
+  const n = S.net; if (!n || !n.nodes.length) return;
+  const nodes = n.nodes, cxp = W / 2, cyp = H / 2;
+  nodes.forEach((v, i) => {
+    if (!NP[v.mmsi]) {
+      const a = i / nodes.length * Math.PI * 2;
+      NP[v.mmsi] = { x: cxp + Math.cos(a) * 170 + (i % 6), y: cyp + Math.sin(a) * 170 + (i % 4), vx: 0, vy: 0 };
+    }
+    const p = NP[v.mmsi]; p.fx = 0; p.fy = 0;
+  });
+  // gentle: low repulsion, strong damping, small speed cap, so it settles calmly
+  const K_REP = 2400, K_SPR = 0.035, SPR = 96, GRAV = 0.02, DAMP = 0.8, CAP = 6;
+  for (let i = 0; i < nodes.length; i++) {
+    const a = NP[nodes[i].mmsi];
+    for (let j = i + 1; j < nodes.length; j++) {
+      const b = NP[nodes[j].mmsi];
+      let dx = a.x - b.x, dy = a.y - b.y, d2 = Math.max(400, dx * dx + dy * dy), d = Math.sqrt(d2), f = K_REP / d2;
+      a.fx += f * dx / d; a.fy += f * dy / d; b.fx -= f * dx / d; b.fy -= f * dy / d;
+    }
+    a.fx += (cxp - a.x) * GRAV; a.fy += (cyp - a.y) * GRAV;
+  }
+  n.edges.forEach(e => {
+    const a = NP[e.a], b = NP[e.b]; if (!a || !b) return;
+    let dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy) || 1, f = K_SPR * (d - SPR);
+    a.fx += f * dx / d; a.fy += f * dy / d; b.fx -= f * dx / d; b.fy -= f * dy / d;
+  });
+  nodes.forEach(v => {
+    const a = NP[v.mmsi]; if (v.mmsi === netDrag) { a.vx = a.vy = 0; return; }
+    a.vx = (a.vx + a.fx) * DAMP; a.vy = (a.vy + a.fy) * DAMP;
+    const sp = Math.hypot(a.vx, a.vy); if (sp > CAP) { a.vx *= CAP / sp; a.vy *= CAP / sp; }
+    a.x = Math.max(24, Math.min(W - 24, a.x + a.vx));
+    a.y = Math.max(60, Math.min(H - 26, a.y + a.vy));
+  });
+}
 function drawNetwork() {
   const g = cx.createLinearGradient(0, 0, 0, H);
   g.addColorStop(0, "#0a2233"); g.addColorStop(1, "#071722");
@@ -197,69 +286,71 @@ function drawNetwork() {
     cx.fillText("ship-to-ship encounters accumulate in the theatre.", 40, H / 2 + 10);
     return;
   }
-  const idx = {}; n.nodes.forEach((v, i) => idx[v.mmsi] = i);
-  const cxp = W / 2, cyp = H / 2, R = Math.min(W, H) * 0.37;
-  n.nodes.forEach((v, i) => {
-    const a = i / n.nodes.length * Math.PI * 2 - Math.PI / 2;
-    v._x = cxp + R * Math.cos(a); v._y = cyp + R * Math.sin(a);
-  });
   const active = S.netSel || S.netHover;
   const nb = new Set();
   if (active) n.edges.forEach(e => { if (e.a === active) nb.add(e.b); if (e.b === active) nb.add(e.a); });
   n.edges.forEach(e => {
-    const a = n.nodes[idx[e.a]], b = n.nodes[idx[e.b]]; if (!a || !b) return;
+    const a = NP[e.a], b = NP[e.b]; if (!a || !b) return;
     const on = active && (e.a === active || e.b === active);
     cx.strokeStyle = on ? "rgba(255,190,110,.95)" : (active ? "rgba(255,120,90,.12)" : "rgba(255,120,90,.3)");
     cx.lineWidth = on ? Math.min(6, 1.6 + e.w) : Math.min(3, e.w);
-    cx.beginPath(); cx.moveTo(a._x, a._y); cx.lineTo(b._x, b._y); cx.stroke();
+    cx.beginPath(); cx.moveTo(a.x, a.y); cx.lineTo(b.x, b.y); cx.stroke();
   });
   n.nodes.forEach(v => {
+    const a = NP[v.mmsi]; if (!a) return;
     const isSel = S.netSel === v.mmsi, isAct = active === v.mmsi, isNb = nb.has(v.mmsi);
     const r = nodeRadius(v), dim = active && !isAct && !isNb ? 0.28 : 1;
     const hot = v.sanc || (v.score != null && v.score >= 0.5);
     cx.globalAlpha = dim;
-    if (hot) { cx.beginPath(); cx.arc(v._x, v._y, r + 7, 0, 7); cx.fillStyle = v.sanc ? "rgba(255,45,85,.15)" : "rgba(255,59,48,.15)"; cx.fill(); }
-    cx.beginPath(); cx.arc(v._x, v._y, r, 0, 7); cx.fillStyle = netColor(v); cx.fill();
-    if (v.sanc) { cx.strokeStyle = "#ff2d55"; cx.lineWidth = 1.6; cx.beginPath(); cx.arc(v._x, v._y, r + 3, 0, 7); cx.stroke(); }
-    if (isSel) { cx.strokeStyle = "#dce8f0"; cx.lineWidth = 1.8; cx.beginPath(); cx.arc(v._x, v._y, r + 5, 0, 7); cx.stroke(); }
+    if (hot) { cx.beginPath(); cx.arc(a.x, a.y, r + 7, 0, 7); cx.fillStyle = v.sanc ? "rgba(255,45,85,.15)" : "rgba(255,59,48,.15)"; cx.fill(); }
+    cx.beginPath(); cx.arc(a.x, a.y, r, 0, 7); cx.fillStyle = netColor(v); cx.fill();
+    if (v.sanc) { cx.strokeStyle = "#ff2d55"; cx.lineWidth = 1.6; cx.beginPath(); cx.arc(a.x, a.y, r + 3, 0, 7); cx.stroke(); }
+    if (isSel) { cx.strokeStyle = "#dce8f0"; cx.lineWidth = 1.8; cx.beginPath(); cx.arc(a.x, a.y, r + 5, 0, 7); cx.stroke(); }
     const showLabel = isAct || isNb || v.sanc || hot || n.nodes.length <= 26;
     if (showLabel) {
       cx.fillStyle = isAct ? "#eaf2f8" : "#9fb8c8"; cx.font = (isAct ? "11px" : "10px") + " monospace";
-      cx.fillText((v.name || v.mmsi) + (v.flag ? "  " + v.flag : ""), v._x + r + 5, v._y + 3);
+      cx.fillText((v.name || v.mmsi) + (v.flag ? "  " + v.flag : ""), a.x + r + 5, a.y + 3);
       if ((isAct || isNb) && v.score != null) {
         cx.fillStyle = "#7fa0b4"; cx.font = "9px monospace";
-        cx.fillText((v.score * 100).toFixed(0) + "%", v._x + r + 5, v._y + 15);
+        cx.fillText((v.score * 100).toFixed(0) + "%", a.x + r + 5, a.y + 15);
       }
     }
     cx.globalAlpha = 1;
   });
   cx.fillStyle = "#5f7f94"; cx.font = "10px monospace";
-  cx.fillText(n.nodes.length + " vessels, " + n.edges.length + " rendezvous edges. click a node for its dossier.", 16, H - 16);
+  cx.fillText(n.nodes.length + " vessels, " + n.edges.length + " rendezvous edges. drag a node, click for its dossier.", 16, H - 16);
 }
 function nodeAt(px, py) {
   const n = S.net; if (!n) return null;
-  let best = null, bd = 16;
+  let best = null, bd = 18;
   for (const v of n.nodes) {
-    if (v._x == null) continue;
-    const d = Math.hypot(v._x - px, v._y - py);
+    const a = NP[v.mmsi]; if (!a) continue;
+    const d = Math.hypot(a.x - px, a.y - py);
     if (d < bd) { bd = d; best = v; }
   }
   return best;
 }
+function selectNode(mmsi) {
+  S.netSel = mmsi;
+  api("/api/vessel/" + mmsi).then(showDossier);
+  draw();
+}
 function netHit(px, py) {
   const v = nodeAt(px, py);
-  if (v) { S.netSel = v.mmsi; api("/api/vessel/" + v.mmsi).then(showDossier); draw(); }
+  if (v) selectNode(v.mmsi);
   else { S.netSel = null; document.getElementById("dossier").classList.remove("show"); draw(); }
 }
 
 // ---- rail + dossier ----
 function renderRail() {
   const el = document.getElementById("rail");
-  el.innerHTML = S.watch.map(w =>
-    `<div class="card ${w.sanc ? "sanc" : ""}" data-m="${w.m}">
-       <div class="h"><span>${esc(w.n)}</span><span class="sc">${w.sanc ? "LISTED" : (w.s * 100).toFixed(0) + "%"}</span></div>
+  el.innerHTML = S.watch.map(w => {
+    const cls = w.dark ? "dark" : (w.sanc ? "sanc" : "");
+    const tag = w.dark ? "DARK" : (w.sanc ? "LISTED" : (w.s * 100).toFixed(0) + "%");
+    return `<div class="card ${cls}" data-m="${w.m}">
+       <div class="h"><span>${esc(w.n)}</span><span class="sc">${tag}</span></div>
        <div class="w">${(w.why || []).map(esc).join(" &middot; ")}</div>
-     </div>`).join("") ||
+     </div>`; }).join("") ||
     `<div class="card" style="border-left-color:#274d66;cursor:default">
        <div class="w">watching ${S.vessels.length} vessels. sanctioned ships and high-suspicion tracks surface here.</div></div>`;
   el.querySelectorAll(".card[data-m]").forEach(c =>
@@ -286,6 +377,12 @@ function focusVessel(mmsi, recenter) {
 
 function showDossier(d) {
   const el = document.getElementById("dossier");
+  if (!d || d.error) {                              // node with no record: still show a card
+    el.innerHTML = `<div class="x" onclick="document.getElementById('dossier').classList.remove('show')">&times;</div>
+      <h2>no dossier on file</h2><div class="sub">this vessel has no live track or registry record yet</div>`;
+    el.classList.add("show"); return;
+  }
+  d.links = d.links || {};
   const sc = d.score == null ? "&mdash;" : (d.score * 100).toFixed(0) + "%";
   const rows = [["flag", d.flag], ["type", d.type], ["built", d.built_year ? d.built_year | 0 : "—"],
     ["tonnage", d.gross_tonnage ? d.gross_tonnage | 0 : "—"], ["destination", d.destination || "—"],
@@ -314,11 +411,12 @@ async function tick() {
   try {
     if (S.view === "net") { S.net = await api("/api/network"); draw(); return; }
     const d = await api("/api/state");
-    S.vessels = d.vessels; S.watch = d.watch;
+    S.vessels = d.vessels; S.watch = d.watch; S.dark = d.dark || [];
     if (S.sel) S.sel = S.vessels.find(v => v.m === S.sel.m) || S.sel;
     document.getElementById("s-tracked").textContent = d.stats.tracked;
     document.getElementById("s-sanc").textContent = d.stats.sanctioned_live;
     document.getElementById("s-scored").textContent = d.stats.scored;
+    const dk = document.getElementById("s-dark"); if (dk) dk.textContent = d.stats.dark || 0;
     const mo = document.getElementById("s-model");
     mo.textContent = d.stats.model ? "MODEL LIVE" : "MODEL OFFLINE";
     mo.style.color = d.stats.model ? "#3aa0ff" : "#4a6579";
@@ -328,13 +426,23 @@ async function tick() {
 }
 
 // ---- interaction ----
-let drag = null;
-cv.addEventListener("pointerdown", e => drag = { x: e.clientX, y: e.clientY, cx: cam.cx, cy: cam.cy, moved: 0 });
+let drag = null, netDrag = null;
+cv.addEventListener("pointerdown", e => {
+  if (S.view === "net") {
+    const h = nodeAt(e.clientX, e.clientY);
+    if (h) { netDrag = h.mmsi; drag = { moved: 0 }; return; }  // grab a node
+  }
+  drag = { x: e.clientX, y: e.clientY, cx: cam.cx, cy: cam.cy, moved: 0 };
+});
 cv.addEventListener("pointermove", e => {
+  if (netDrag) {                                    // drag a graph node, physics follows
+    const p = NP[netDrag]; if (p) { p.x = e.clientX; p.y = e.clientY; p.vx = p.vy = 0; }
+    drag.moved += 5; draw(); return;
+  }
   if (!drag) {                                      // hover: cursor + network highlight
     if (S.view === "net") {
       const h = nodeAt(e.clientX, e.clientY), m = h ? h.mmsi : null;
-      cv.style.cursor = h ? "pointer" : "default";
+      cv.style.cursor = h ? "grab" : "default";
       if (m !== S.netHover) { S.netHover = m; draw(); }
     } else if (S.view === "live") {
       cv.style.cursor = nearestVessel(e.clientX, e.clientY, 18) ? "pointer" : "grab";
@@ -348,6 +456,7 @@ cv.addEventListener("pointermove", e => {
   draw();
 });
 cv.addEventListener("pointerup", e => {
+  if (netDrag) { if (drag && drag.moved < 6) selectNode(netDrag); netDrag = null; drag = null; return; }
   if (drag && drag.moved < 5) {
     if (S.view === "live") hitTest(e.clientX, e.clientY);
     else if (S.view === "net") netHit(e.clientX, e.clientY);
@@ -371,15 +480,27 @@ function nearestVessel(px, py, tol) {
 }
 function hitTest(px, py) {
   const best = nearestVessel(px, py, 18);           // bigger target on a wide map
-  if (best) focusVessel(best.m, false);             // no camera yank on a map click
-  else { S.sel = null; S.trail = []; document.getElementById("dossier").classList.remove("show"); draw(); }
+  if (best) { focusVessel(best.m, false); return; } // no camera yank on a map click
+  const dk = nearestDark(px, py, 22);               // dark ghosts are clickable (the interesting ones)
+  if (dk) { S.sel = null; api("/api/vessel/" + dk.m).then(showDossier); draw(); return; }
+  S.sel = null; S.trail = []; document.getElementById("dossier").classList.remove("show"); draw();
+}
+function nearestDark(px, py, tol) {
+  let best = null, bd = tol;
+  for (const v of (S.dark || [])) {
+    const q = proj(v.lo, v.la);
+    const d = Math.hypot(q.x - px, q.y - py);
+    if (d < bd) { bd = d; best = v; }
+  }
+  return best;
 }
 
 document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
   document.querySelectorAll(".tab").forEach(x => x.classList.remove("on"));
   t.classList.add("on");
   S.view = t.getAttribute("data-v");
-  document.getElementById("legend").style.display = S.view === "net" ? "none" : "block";
+  document.getElementById("legend").style.display = S.view === "live" ? "block" : "none";
+  document.getElementById("heatlegend").style.display = S.view === "heat" ? "block" : "none";
   tick();
 });
 
@@ -388,6 +509,7 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
 let _lastT = 0;
 function animate(t) {
   requestAnimationFrame(animate);
+  if (S.view === "net") { simulateNet(); draw(); _lastT = t; return; }   // force layout
   if (S.view !== "live") { _lastT = t; return; }
   const dt = _lastT ? Math.min(1.5, (t - _lastT) / 1000) : 0; _lastT = t;
   if (!dt) return;
@@ -400,7 +522,7 @@ function animate(t) {
     v._dlo += dLat * Math.sin(c) / Math.max(0.2, Math.cos(v.la * Math.PI / 180));
     moved = true;
   }
-  if (moved) draw();
+  if (moved || (S.dark && S.dark.length)) draw();   // dark ghosts keep pulsing
 }
 requestAnimationFrame(animate);
 
