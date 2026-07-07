@@ -26,8 +26,10 @@ def main():
     models = mr.get_models("shadow_vessel")
     if not models:
         raise RuntimeError("no shadow_vessel model registered yet; run fleet-train")
-    model = max(models, key=lambda m: m.version)
-    print(f"model shadow_vessel v{model.version}", flush=True)
+    # champion = best lift over blind (the advertised metric), newest on ties.
+    # All runs are registered for version control, so pick by metric, not recency.
+    model = max(models, key=lambda m: (m.training_metrics.get("lift_over_blind", 0), m.version))
+    print(f"model shadow_vessel v{model.version} (lift {model.training_metrics.get('lift_over_blind')})", flush=True)
 
     env_api = proj.get_environment_api()
     env = env_api.get_environment(ENV_NAME)

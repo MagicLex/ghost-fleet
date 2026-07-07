@@ -36,7 +36,10 @@ def _find_artifacts():
     models = mr.get_models("shadow_vessel")
     if not models:
         raise RuntimeError("no shadow_vessel model registered yet")
-    model = max(models, key=lambda m: m.version)
+    # serve the champion: best lift over blind (the advertised metric), newest on ties.
+    # Every training run is registered for version control, so "latest version" is
+    # not necessarily the best; pick by the metric, not by recency.
+    model = max(models, key=lambda m: (m.training_metrics.get("lift_over_blind", 0), m.version))
     d = model.download()
     if not os.path.exists(os.path.join(d, "ghost_features.py")):
         raise RuntimeError(f"extractor missing from registry download {d}")

@@ -23,7 +23,7 @@ features-job:        ## deploy + schedule the vessel behaviour features (every 3
 	hops job deploy fleet-features pipelines/features_pipeline.py --env $(FEAT_ENV) --overwrite
 	python3 tools/schedule.py fleet-features "0 0/30 * ? * *" --run
 
-train-job:           ## deploy + schedule the shadow_vessel retrain (daily, promotion-gated)
+train-job:           ## deploy + schedule the shadow_vessel retrain (daily; every run registered, serve best by lift)
 	hops job deploy fleet-train pipelines/train.py --env $(TRAIN_ENV) --overwrite
 	python3 tools/schedule.py fleet-train "0 40 2 ? * *"
 

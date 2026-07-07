@@ -6,8 +6,8 @@ gradient-boosting classifier on the behaviour features, grouped-CV by flag so a
 known ring cannot leak across folds, and reports the lift over a blind
 flag-of-convenience rule (the honest headline: the label is a population split).
 
-No positives yet -> exits cleanly. The daily promotion-gated retrain trains for
-real once sanctioned vessels have transited our AIS coverage.
+No positives yet -> exits cleanly. The daily retrain registers every run for
+full version control; serving picks the champion by lift over blind.
 """
 import glob
 import json
@@ -29,11 +29,10 @@ from ghost_features import FEATURE_COLUMNS  # noqa: E402
 
 MODEL_NAME = "shadow_vessel"
 MIN_POSITIVES = int(os.environ.get("MIN_POSITIVES", "12"))
-# Promote on ROC-AUC, not PR-AUC: at ~20 positives PR-AUC swings ~0.02+ between
-# runs (chases noise), ROC is far steadier. Require a real margin so we only
-# ship a genuine improvement, never churn the champion on CV noise.
-PROMOTE_METRIC = "cv_roc_auc"
-PROMOTE_MARGIN = float(os.environ.get("PROMOTE_MARGIN", "0.005"))
+# Every training run is registered (full version control, worse ones included).
+# The champion served is chosen at serve time by the advertised metric, lift over
+# blind (see serving/); the registry keeps the whole lineage either way.
+CHAMPION_METRIC = "lift_over_blind"
 SERVE_REQS = ["scikit-learn==1.5.2", "numpy==1.26.4", "pandas==2.2.2",
               "joblib==1.4.2", "scipy==1.13.1"]
 
@@ -191,18 +190,17 @@ def _register(proj, model, X, y, oof, metrics):
         f.write(card)
 
     existing = mr.get_models(MODEL_NAME)
-    champ = max([m.training_metrics.get(PROMOTE_METRIC, 0) for m in existing], default=0) if existing else 0
-    if existing and metrics[PROMOTE_METRIC] <= champ + PROMOTE_MARGIN:
-        print(f"challenger {PROMOTE_METRIC} {metrics[PROMOTE_METRIC]} does not beat "
-              f"champion {champ} by margin {PROMOTE_MARGIN}; not registering", flush=True)
-        return
+    champ = max([m.training_metrics.get(CHAMPION_METRIC, 0) for m in existing], default=0)
     m = mr.python.create_model(
         name=MODEL_NAME, metrics=metrics,
         description="Shadow-fleet deception score from vessel behaviour; "
                     "evasion signal, not proof of crime.",
         feature_view=proj.get_feature_store().get_feature_view("shadow_vessel_fv", 1))
     m.save(d)
-    print(f"registered {MODEL_NAME} v{m.version} (PR-AUC {metrics['cv_pr_auc']})", flush=True)
+    verdict = ("new champion" if metrics[CHAMPION_METRIC] > champ
+               else f"kept for lineage (champion {CHAMPION_METRIC} {champ})")
+    print(f"registered {MODEL_NAME} v{m.version} "
+          f"({CHAMPION_METRIC} {metrics[CHAMPION_METRIC]}) -- {verdict}", flush=True)
 
 
 if __name__ == "__main__":
