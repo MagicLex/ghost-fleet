@@ -21,13 +21,26 @@ label is weak (open sanctions lists, by IMO), so the model catches vessels that
 `shadow_vessel`, a gradient-boosted classifier on `vessel_track_features`
 (behavioural signals fused point-in-time with GFW events and identity). The
 label is sanctions membership by IMO, so it is a lagging, incomplete proxy, and
-the honest metric is the lift over simply looking a vessel up on the list, on a
-population split, not a random row split.
+the honest metric is the lift over simply looking a vessel up on the list.
+Splits are grouped by flag state (GroupKFold, out-of-fold), not random rows.
+
+Served model: `shadow_vessel` v1. The train job retrains nightly; later
+versions register with their own metrics and are promoted by hand, not
+automatically.
 
 | metric | value |
 |---|---:|
 | lift over a blind sanctions-list lookup | **9.4x** |
-| ROC-AUC (population split) | 0.92 |
+| ROC-AUC (grouped CV by flag) | 0.92 |
+| PR-AUC (grouped CV) | 0.09, blind FOC baseline 0.009 |
+| training rows / positives | 7,512 / 18 |
+
+![precision-recall](assets/pr_curve.png)
+![feature importance](assets/feature_importance.png)
+
+Top features: `avg_sog`, `is_tanker`, `span_hours`, `max_recv_gap_hours`,
+`p95_sog`. GFW event counts contribute little at this data volume; the AIS
+track statistics carry the model.
 
 The score is behaviour, not list membership, by design. A Cameroon-flag vessel
 running the shadow-fleet playbook scores 0.96. A sanctioned Russian vessel

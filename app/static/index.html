@@ -58,8 +58,13 @@
   .legend{position:fixed;left:12px;top:60px;z-index:4;background:var(--panel);
     border:1px solid #163044;border-radius:5px;padding:8px 10px;font-size:10px;color:var(--dim)}
   .legend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:-1px}
-  .card.dark{border-left-color:#ff963c}
-  .card.dark .h .sc{color:#ff963c}
+  .legend{pointer-events:auto}
+  .fchip{padding:3px 9px;font-size:9.5px;letter-spacing:.14em;color:var(--dim);cursor:pointer;
+    border:1px solid #1d3a4f;border-radius:3px;background:rgba(255,255,255,.03)}
+  .fchip.on{color:var(--ink);border-color:var(--coast);background:rgba(58,160,255,.14)}
+  .fchip[data-f="dark"].on{border-color:#6b4a99;background:rgba(180,120,255,.14)}
+  .card.dark{border-left-color:#b478ff}
+  .card.dark .h .sc{color:#b478ff}
   .heatlegend{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;z-index:4;
     background:var(--panel);border:1px solid #163044;border-radius:6px;padding:8px 12px;
     display:none;width:264px;backdrop-filter:blur(6px)}
@@ -82,17 +87,21 @@
     <div>TRACKED <b id="s-tracked">0</b></div>
     <div>SANCTIONED&nbsp;LIVE <b id="s-sanc" class="m0">0</b></div>
     <div>SCORED <b id="s-scored">0</b></div>
-    <div>DARK <b id="s-dark" style="color:#ff963c">0</b></div>
+    <div>DARK <b id="s-dark" style="color:#b478ff">0</b></div>
     <div>UTC <b id="s-clock">--:--:--</b></div>
     <div id="s-model" style="color:#4a6579">MODEL OFFLINE</div>
   </div>
 </div>
 <div class="legend" id="legend">
+  <div style="display:flex;gap:4px;margin-bottom:7px">
+    <div class="fchip" data-f="scored">SCORED</div>
+    <div class="fchip" data-f="dark">DARK</div>
+  </div>
   <div><i style="background:#3aa0ff"></i>calm traffic</div>
   <div><i style="background:#ffb020"></i>rising suspicion</div>
   <div><i style="background:#ff3b30"></i>high suspicion</div>
   <div><i style="background:#ff2d55;border-radius:2px"></i>on sanctions list</div>
-  <div><i style="background:#ff963c;border-radius:0"></i>went dark (AIS lost)</div>
+  <div><i style="background:#b478ff;border-radius:0"></i>went dark (AIS lost)</div>
 </div>
 <div class="heatlegend" id="heatlegend">
   <div class="hl-lab" style="margin-bottom:5px;color:#9fb8c8;letter-spacing:.14em">SHADOW ACTIVITY DENSITY</div>

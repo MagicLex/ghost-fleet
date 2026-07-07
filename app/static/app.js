@@ -8,7 +8,12 @@ const FRAME = { lon0: 9, lon1: 30.5, lat0: 53.3, lat1: 61.0 };
 let cam = { cx: (FRAME.lon0 + FRAME.lon1) / 2, cy: (FRAME.lat0 + FRAME.lat1) / 2, scale: 1 };
 let DPR = 1, W = 0, H = 0;
 const S = { view: "live", vessels: [], watch: [], heat: null, net: null, dark: [],
-            sel: null, trail: [], base: null, netSel: null, netHover: null };
+            sel: null, trail: [], trails: {}, trailsAt: 0, base: null,
+            netSel: null, netHover: null, filter: { scored: false, dark: false } };
+// show-only filters: none active = everything; active chips = union of categories
+const anyFilter = () => S.filter.scored || S.filter.dark;
+const visV = v => !anyFilter() || (S.filter.scored && v.s != null && v.s > 0) || v.sanc;
+const visDark = () => !anyFilter() || S.filter.dark;
 
 function resize() {
   DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -17,21 +22,24 @@ function resize() {
   if (!W || !H) { requestAnimationFrame(resize); return; }
   cv.width = W * DPR; cv.height = H * DPR;
   const sx = W / (FRAME.lon1 - FRAME.lon0);
-  const sy = H / (FRAME.lat1 - FRAME.lat0);
-  cam.scale = Math.min(sx, sy) * 0.98 / baseScale();
+  const sy = H / (mercY(FRAME.lat1) - mercY(FRAME.lat0));
+  cam.scale = Math.min(sx, sy) * 0.98;
   draw();
 }
-function baseScale() { return 1; }
-const cosMid = () => Math.cos((cam.cy) * Math.PI / 180);
+// Web Mercator projection so satellite imagery tiles align pixel-perfect.
+// mercY maps lat to a world y in [-180, 180] "degrees".
+const MER = 180 / Math.PI;
+const mercY = lat => MER * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+const imercY = y => (2 * Math.atan(Math.exp(y / MER)) - Math.PI / 2) * 180 / Math.PI;
 function proj(lon, lat) {
   const k = cam.scale;
-  return { x: W / 2 + (lon - cam.cx) * k * cosMid(),
-           y: H / 2 - (lat - cam.cy) * k };
+  return { x: W / 2 + (lon - cam.cx) * k,
+           y: H / 2 - (mercY(lat) - mercY(cam.cy)) * k };
 }
 function unproj(x, y) {
   const k = cam.scale;
-  return { lon: cam.cx + (x - W / 2) / (k * cosMid()),
-           lat: cam.cy - (y - H / 2) / k };
+  return { lon: cam.cx + (x - W / 2) / k,
+           lat: imercY(mercY(cam.cy) - (y - H / 2) / k) };
 }
 // display position: dead-reckoned pos when animating, else the last server fix
 const vlon = v => v._dlo != null ? v._dlo : v.lo;
@@ -58,14 +66,55 @@ function draw() {
   g.addColorStop(0, "#081c2b"); g.addColorStop(1, "#040f18");
   cx.fillStyle = g; cx.fillRect(0, 0, W, H);
   if (S.view === "net") { drawNetwork(); cx.restore(); return; }
+  const tiled = drawTiles();
+  drawBase(tiled);
   drawGraticule();
-  drawBase();
   if (S.view === "heat") drawHeat();
+  if (S.view === "live") drawWakes();
   drawVessels();
   if (S.trail.length) drawTrail();
   if (S.dark && S.dark.length) drawDark();
   drawVignette();
   cx.restore();
+}
+
+// ---- satellite imagery: Esri World Imagery tiles (free, no key), drawn under a
+// dark navy wash so vessel dots keep contrast. Vector coast stays as fallback. ----
+const TILES = new Map();
+function getTile(z, x, y) {
+  const key = z + "/" + x + "/" + y;
+  let t = TILES.get(key);
+  if (t) return t;
+  if (TILES.size > 400) TILES.delete(TILES.keys().next().value);
+  t = { img: new Image(), ok: false };
+  t.img.onload = () => { t.ok = true; draw(); };
+  t.img.src = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+  TILES.set(key, t);
+  return t;
+}
+function drawTiles() {
+  const k = cam.scale, myc = mercY(cam.cy);
+  let z = Math.max(3, Math.min(12, Math.round(Math.log2(k * 360 / 256))));
+  let n = 1 << z;
+  const lonW = W / k, myH = H / k;
+  while (z > 3 && (lonW / (360 / n)) * (myH / (360 / n)) > 200) { z--; n = 1 << z; }
+  const tx0 = Math.floor((cam.cx - lonW / 2 + 180) / 360 * n);
+  const tx1 = Math.floor((cam.cx + lonW / 2 + 180) / 360 * n);
+  const ty0 = Math.max(0, Math.floor((1 - (myc + myH / 2) / 180) / 2 * n));
+  const ty1 = Math.min(n - 1, Math.floor((1 - (myc - myH / 2) / 180) / 2 * n));
+  let drew = 0;
+  for (let ty = ty0; ty <= ty1; ty++) for (let tx = tx0; tx <= tx1; tx++) {
+    const t = getTile(z, ((tx % n) + n) % n, ty);
+    if (!t.ok) continue;
+    const lonA = tx / n * 360 - 180, lonB = (tx + 1) / n * 360 - 180;
+    const myA = 180 * (1 - 2 * ty / n), myB = 180 * (1 - 2 * (ty + 1) / n);
+    const x0 = W / 2 + (lonA - cam.cx) * k, x1 = W / 2 + (lonB - cam.cx) * k;
+    const y0 = H / 2 - (myA - myc) * k, y1 = H / 2 - (myB - myc) * k;
+    cx.drawImage(t.img, x0, y0, x1 - x0 + 0.6, y1 - y0 + 0.6);
+    drew++;
+  }
+  if (drew) { cx.fillStyle = "rgba(4,15,26,.52)"; cx.fillRect(0, 0, W, H); }  // ops-room wash
+  return drew > 0;
 }
 
 const RU_OIL = { "Primorsk": 1, "Ust-Luga": 1, "Vysotsk": 1 };  // shadow-fleet loading terminals
@@ -74,15 +123,33 @@ function landPath(poly) {
   poly.forEach((p, i) => { const q = proj(p[0], p[1]); i ? cx.lineTo(q.x, q.y) : cx.moveTo(q.x, q.y); });
   cx.closePath();
 }
-function drawBase() {
+function drawBase(tiled) {
   const b = S.base; if (!b) return;
   cx.lineJoin = cx.lineCap = "round";
   const land = b.land || [];
-  land.forEach(poly => { landPath(poly); cx.fillStyle = "#12211c"; cx.fill(); });  // terrain-green land
-  cx.strokeStyle = "rgba(78,168,200,.13)"; cx.lineWidth = 4;                        // soft coast halo
+  if (!tiled) {                                     // vector fallback while tiles load / offline
+    land.forEach(poly => { landPath(poly); cx.fillStyle = "#12211c"; cx.fill(); });
+    cx.strokeStyle = "rgba(78,168,200,.13)"; cx.lineWidth = 4;
+    land.forEach(poly => { landPath(poly); cx.stroke(); });
+  }
+  cx.strokeStyle = tiled ? "rgba(132,206,230,.28)" : "rgba(132,206,230,.6)";        // crisp coastline
+  cx.lineWidth = 1;
   land.forEach(poly => { landPath(poly); cx.stroke(); });
-  cx.strokeStyle = "rgba(132,206,230,.6)"; cx.lineWidth = 1;                        // crisp coastline
-  land.forEach(poly => { landPath(poly); cx.stroke(); });
+  cx.setLineDash([4, 4]); cx.strokeStyle = "rgba(150,180,205,.28)"; cx.lineWidth = 1;  // country borders
+  (b.borders || []).forEach(line => {
+    cx.beginPath();
+    line.forEach((p, i) => { const q = proj(p[0], p[1]); i ? cx.lineTo(q.x, q.y) : cx.moveTo(q.x, q.y); });
+    cx.stroke();
+  });
+  cx.setLineDash([]);
+  cx.font = "10.5px monospace"; cx.fillStyle = "rgba(165,200,220,.42)";              // country names
+  cx.textAlign = "center"; cx.letterSpacing = "3px";
+  (b.labels || []).forEach(l => {
+    const q = proj(l[0], l[1]);
+    if (q.x < 30 || q.x > W - 30 || q.y < 60 || q.y > H - 30) return;
+    cx.fillText(l[2], q.x, q.y);
+  });
+  cx.textAlign = "left"; cx.letterSpacing = "0px";
   (b.ports || []).forEach(p => {
     const q = proj(p[0], p[1]);
     if (q.x < -40 || q.x > W + 40 || q.y < -20 || q.y > H + 20) return;
@@ -117,26 +184,55 @@ function drawVignette() {
   cx.fillStyle = g; cx.fillRect(0, 0, W, H);
 }
 
-// vessels that went dark: ghost markers pulsing at last known position (the thesis)
+// wake trails: recent track behind every moving vessel, so the fleet reads as
+// alive even though real ship speed is ~1px/min at this zoom. Positions stay honest.
+function drawWakes() {
+  cx.lineJoin = cx.lineCap = "round";
+  for (const v of S.vessels) {
+    if (!visV(v)) continue;
+    const tr = S.trails[v.m]; if (!tr || tr.length < 2) continue;
+    const qh = proj(vlon(v), vlat(v));
+    if (qh.x < -150 || qh.x > W + 150 || qh.y < -150 || qh.y > H + 150) continue;
+    const col = colorFor(v);
+    cx.strokeStyle = col; cx.globalAlpha = 0.16; cx.lineWidth = 1;
+    cx.beginPath();
+    tr.forEach((p, i) => { const q = proj(p[1], p[0]); i ? cx.lineTo(q.x, q.y) : cx.moveTo(q.x, q.y); });
+    cx.lineTo(qh.x, qh.y); cx.stroke();
+    cx.globalAlpha = 0.5; cx.lineWidth = 1.5;                    // brighter head segment
+    cx.beginPath();
+    tr.slice(-4).forEach((p, i) => { const q = proj(p[1], p[0]); i ? cx.lineTo(q.x, q.y) : cx.moveTo(q.x, q.y); });
+    cx.lineTo(qh.x, qh.y); cx.stroke();
+    cx.globalAlpha = 1;
+  }
+}
+
+// vessels that went dark: ghost markers pulsing at last known position (the thesis).
+// Violet + X-marker: "signal lost" is its own visual language, distinct from the
+// blue->amber->red suspicion ramp.
 function drawDark() {
+  if (!visDark()) return;
   const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 1000 * 2.2);
   cx.font = "10px monospace";
   for (const v of S.dark) {
     const q = proj(v.lo, v.la);
     if (q.x < -20 || q.x > W + 20 || q.y < -20 || q.y > H + 20) continue;
-    const c = v.sanc ? "255,45,85" : "255,150,60";
+    const c = v.sanc ? "255,45,85" : "180,120,255";
     cx.setLineDash([3, 3]); cx.strokeStyle = `rgba(${c},${0.2 + 0.5 * pulse})`; cx.lineWidth = 1.4;
     cx.beginPath(); cx.arc(q.x, q.y, 7 + 6 * pulse, 0, 7); cx.stroke(); cx.setLineDash([]);
-    cx.strokeStyle = `rgba(${c},.95)`; cx.lineWidth = 1.6;
-    cx.beginPath(); cx.arc(q.x, q.y, 4, 0, 7); cx.stroke();
+    cx.strokeStyle = `rgba(${c},.95)`; cx.lineWidth = 1.8;
+    cx.beginPath();
+    cx.moveTo(q.x - 3.5, q.y - 3.5); cx.lineTo(q.x + 3.5, q.y + 3.5);
+    cx.moveTo(q.x + 3.5, q.y - 3.5); cx.lineTo(q.x - 3.5, q.y + 3.5);
+    cx.stroke();
     cx.fillStyle = `rgba(${c},.95)`;
-    cx.fillText("DARK " + Math.round(v.dark_min) + "m", q.x + 9, q.y + 3);
+    cx.fillText("AIS LOST " + Math.round(v.dark_min) + "m", q.x + 9, q.y + 3);
   }
 }
 
 function drawVessels() {
   const dim = S.view === "heat" ? 0.4 : 1;
   for (const v of S.vessels) {
+    if (!visV(v)) continue;
     const q = proj(vlon(v), vlat(v));
     if (q.x < -20 || q.x > W + 20 || q.y < -20 || q.y > H + 20) continue;
     const col = colorFor(v);
@@ -224,7 +320,7 @@ function drawHeat() {
   }
   cx.setLineDash([5, 4]); cx.strokeStyle = "rgba(255,90,80,.5)"; cx.lineWidth = 1;
   (h.hotspots || []).forEach(p => {
-    const q = proj(p[1], p[0]), r = p[2] / 111 * cam.scale;
+    const q = proj(p[1], p[0]), r = p[2] / 111 * cam.scale / Math.cos(p[0] * Math.PI / 180);
     cx.beginPath(); cx.arc(q.x, q.y, r, 0, 7); cx.stroke();
   });
   cx.setLineDash([]);
@@ -244,15 +340,18 @@ const NP = {};
 function simulateNet() {
   const n = S.net; if (!n || !n.nodes.length) return;
   const nodes = n.nodes, cxp = W / 2, cyp = H / 2;
+  const ring = Math.min(W, H) * 0.34;
   nodes.forEach((v, i) => {
     if (!NP[v.mmsi]) {
       const a = i / nodes.length * Math.PI * 2;
-      NP[v.mmsi] = { x: cxp + Math.cos(a) * 170 + (i % 6), y: cyp + Math.sin(a) * 170 + (i % 4), vx: 0, vy: 0 };
+      NP[v.mmsi] = { x: cxp + Math.cos(a) * ring + (i % 6), y: cyp + Math.sin(a) * ring + (i % 4), vx: 0, vy: 0 };
     }
     const p = NP[v.mmsi]; p.fx = 0; p.fy = 0;
   });
-  // gentle: low repulsion, strong damping, small speed cap, so it settles calmly
-  const K_REP = 2400, K_SPR = 0.035, SPR = 96, GRAV = 0.02, DAMP = 0.8, CAP = 6;
+  // layout scaled to the viewport: spring length from screen size and node count,
+  // repulsion to match, gravity just enough to keep the constellation on screen
+  const SPR = Math.max(120, Math.min(W, H) / (1.2 * Math.sqrt(nodes.length)));
+  const K_REP = SPR * SPR * 1.6, K_SPR = 0.02, GRAV = 0.004, DAMP = 0.82, CAP = 8;
   for (let i = 0; i < nodes.length; i++) {
     const a = NP[nodes[i].mmsi];
     for (let j = i + 1; j < nodes.length; j++) {
@@ -322,17 +421,32 @@ function drawNetwork() {
 }
 function nodeAt(px, py) {
   const n = S.net; if (!n) return null;
-  let best = null, bd = 18;
+  let best = null, bd = 1e9;
   for (const v of n.nodes) {
     const a = NP[v.mmsi]; if (!a) continue;
-    const d = Math.hypot(a.x - px, a.y - py);
+    const d = Math.hypot(a.x - px, a.y - py) - nodeRadius(v);   // edge distance: big nodes = big targets
     if (d < bd) { bd = d; best = v; }
   }
-  return best;
+  return bd <= 14 ? best : null;
+}
+// who this ship met at sea, ranked by encounter count -- the payload of the
+// network view: click a node, read its ring, hop to the next vessel
+function netPartners(mmsi) {
+  const n = S.net; if (!n) return [];
+  const out = [];
+  n.edges.forEach(e => {
+    const other = e.a === mmsi ? e.b : (e.b === mmsi ? e.a : null);
+    if (!other) return;
+    const v = n.nodes.find(x => x.mmsi === other) || {};
+    out.push({ mmsi: other, name: v.name || other, w: e.w, sanc: v.sanc, score: v.score });
+  });
+  return out.sort((a, b) => b.w - a.w);
 }
 function selectNode(mmsi) {
   S.netSel = mmsi;
-  api("/api/vessel/" + mmsi).then(showDossier);
+  api("/api/vessel/" + mmsi)
+    .catch(() => null)                              // transient fetch fail: still show a card
+    .then(d => showDossier(d, netPartners(mmsi)));
   draw();
 }
 function netHit(px, py) {
@@ -375,12 +489,20 @@ function focusVessel(mmsi, recenter) {
   draw();
 }
 
-function showDossier(d) {
+function showDossier(d, partners) {
   const el = document.getElementById("dossier");
+  const meets = (partners && partners.length) ?
+    `<div class="sub" style="margin-top:10px;letter-spacing:.14em">SHIP-TO-SHIP RENDEZVOUS</div>
+     <div class="rows">` + partners.slice(0, 8).map(p =>
+      `<div class="row partner" data-m="${p.mmsi}" style="cursor:pointer">
+         <span style="color:${p.sanc ? "#ff2d55" : "#cfe0ec"}">${esc(p.name)}${p.score != null ? ` <i style="color:#7fa0b4;font-style:normal">${(p.score * 100).toFixed(0)}%</i>` : ""}</span>
+         <span style="color:#ffb020">${p.w}&times;</span></div>`).join("") + `</div>` : "";
+  const wire = () => el.querySelectorAll(".partner").forEach(x =>
+    x.onclick = () => selectNode(x.getAttribute("data-m")));
   if (!d || d.error) {                              // node with no record: still show a card
     el.innerHTML = `<div class="x" onclick="document.getElementById('dossier').classList.remove('show')">&times;</div>
-      <h2>no dossier on file</h2><div class="sub">this vessel has no live track or registry record yet</div>`;
-    el.classList.add("show"); return;
+      <h2>no dossier on file</h2><div class="sub">this vessel has no live track or registry record yet</div>${meets}`;
+    el.classList.add("show"); wire(); return;
   }
   d.links = d.links || {};
   const sc = d.score == null ? "&mdash;" : (d.score * 100).toFixed(0) + "%";
@@ -396,12 +518,13 @@ function showDossier(d) {
     ${d.events && d.events.length ? `<div class="sub">${d.events.length} GFW events: ` +
       d.events.slice(0, 4).map(e => e.type).join(", ") + "</div>" : ""}
     <div class="rows">${rows.map(r => `<div class="row"><span>${r[0]}</span><span>${esc(String(r[1] ?? "—"))}</span></div>`).join("")}</div>
+    ${meets}
     <div style="margin-top:10px">
       <a href="${d.links.marinetraffic}" target="_blank">MarineTraffic</a>
       ${d.links.gfw ? `<a href="${d.links.gfw}" target="_blank">Global Fishing Watch</a>` : ""}
       <a href="${d.links.equasis}" target="_blank">Equasis</a>
     </div>`;
-  el.classList.add("show");
+  el.classList.add("show"); wire();
 }
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -421,6 +544,10 @@ async function tick() {
     mo.textContent = d.stats.model ? "MODEL LIVE" : "MODEL OFFLINE";
     mo.style.color = d.stats.model ? "#3aa0ff" : "#4a6579";
     if (S.view === "heat") S.heat = await api("/api/heatmap");
+    if (Date.now() - S.trailsAt > 30000) {          // wakes change slowly: refresh every 30s
+      S.trailsAt = Date.now();
+      api("/api/trails").then(d => { S.trails = d.trails || {}; draw(); });
+    }
     renderRail(); draw();
   } catch (e) { /* transient */ }
 }
@@ -430,33 +557,35 @@ let drag = null, netDrag = null;
 cv.addEventListener("pointerdown", e => {
   if (S.view === "net") {
     const h = nodeAt(e.clientX, e.clientY);
-    if (h) { netDrag = h.mmsi; drag = { moved: 0 }; return; }  // grab a node
+    if (h) { netDrag = h.mmsi; drag = { x: e.clientX, y: e.clientY, moved: 0 }; return; }  // grab a node
   }
-  drag = { x: e.clientX, y: e.clientY, cx: cam.cx, cy: cam.cy, moved: 0 };
+  drag = { x: e.clientX, y: e.clientY, cx: cam.cx, my: mercY(cam.cy), moved: 0 };
 });
+// click vs drag: real pixel distance from pointerdown, not a per-event counter
+// (a counter kills clicks -- the mouse always jiggles a couple of move events)
+const dragDist = e => Math.hypot(e.clientX - drag.x, e.clientY - drag.y);
 cv.addEventListener("pointermove", e => {
   if (netDrag) {                                    // drag a graph node, physics follows
     const p = NP[netDrag]; if (p) { p.x = e.clientX; p.y = e.clientY; p.vx = p.vy = 0; }
-    drag.moved += 5; draw(); return;
+    drag.moved = Math.max(drag.moved, dragDist(e)); draw(); return;
   }
   if (!drag) {                                      // hover: cursor + network highlight
     if (S.view === "net") {
       const h = nodeAt(e.clientX, e.clientY), m = h ? h.mmsi : null;
-      cv.style.cursor = h ? "grab" : "default";
+      cv.style.cursor = h ? "pointer" : "default";
       if (m !== S.netHover) { S.netHover = m; draw(); }
     } else if (S.view === "live") {
       cv.style.cursor = nearestVessel(e.clientX, e.clientY, 18) ? "pointer" : "grab";
     }
     return;
   }
-  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-  drag.moved += Math.abs(dx) + Math.abs(dy);
-  cam.cx = drag.cx - dx / (cam.scale * cosMid());
-  cam.cy = drag.cy + dy / cam.scale;
+  drag.moved = Math.max(drag.moved, dragDist(e));
+  cam.cx = drag.cx - (e.clientX - drag.x) / cam.scale;
+  cam.cy = imercY(drag.my + (e.clientY - drag.y) / cam.scale);
   draw();
 });
 cv.addEventListener("pointerup", e => {
-  if (netDrag) { if (drag && drag.moved < 6) selectNode(netDrag); netDrag = null; drag = null; return; }
+  if (netDrag) { if (drag && drag.moved < 5) selectNode(netDrag); netDrag = null; drag = null; return; }
   if (drag && drag.moved < 5) {
     if (S.view === "live") hitTest(e.clientX, e.clientY);
     else if (S.view === "net") netHit(e.clientX, e.clientY);
@@ -472,6 +601,7 @@ cv.addEventListener("wheel", e => {
 function nearestVessel(px, py, tol) {
   let best = null, bd = tol;
   for (const v of S.vessels) {
+    if (!visV(v)) continue;                         // invisible boats not clickable
     const q = proj(vlon(v), vlat(v));
     const d = Math.hypot(q.x - px, q.y - py);
     if (d < bd) { bd = d; best = v; }
@@ -487,6 +617,7 @@ function hitTest(px, py) {
 }
 function nearestDark(px, py, tol) {
   let best = null, bd = tol;
+  if (!visDark()) return null;
   for (const v of (S.dark || [])) {
     const q = proj(v.lo, v.la);
     const d = Math.hypot(q.x - px, q.y - py);
@@ -495,6 +626,12 @@ function nearestDark(px, py, tol) {
   return best;
 }
 
+document.querySelectorAll(".fchip").forEach(c => c.onclick = () => {
+  const f = c.getAttribute("data-f");
+  S.filter[f] = !S.filter[f];
+  c.classList.toggle("on", S.filter[f]);
+  draw();
+});
 document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
   document.querySelectorAll(".tab").forEach(x => x.classList.remove("on"));
   t.classList.add("on");

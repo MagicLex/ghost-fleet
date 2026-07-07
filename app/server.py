@@ -189,7 +189,9 @@ async def score_loop():
 async def enrich_loop():
     while True:
         await asyncio.to_thread(_refresh_enrichment)
-        await asyncio.sleep(600)
+        # HDFS storms make individual reads fail transiently; when the event
+        # table (feeds heatmap + network) came back empty, retry soon
+        await asyncio.sleep(120 if not ENRICH["events"] else 600)
 
 
 # --- API -----------------------------------------------------------------
@@ -313,6 +315,24 @@ def network():
     return {"nodes": nodes, "edges": NETWORK["edges"], "at": NETWORK["at"]}
 
 
+@app.get("/api/trails")
+def trails():
+    """Recent track for every live moving vessel, decimated -- drawn as wake
+    trails so the fleet reads as moving at real-time speed."""
+    now = time.time()
+    out = {}
+    for m, r in VESSELS.items():
+        if now - r["ts"] > LIVE_S or (r.get("sog") or 0) < 0.5:
+            continue
+        t = TRAILS.get(m)
+        if not t or len(t) < 3:
+            continue
+        pts = list(t)
+        step = max(1, len(pts) // 24)
+        out[m] = pts[::step][-24:]
+    return {"trails": out}
+
+
 @app.get("/api/trail/{mmsi}")
 def trail(mmsi: str):
     if not mmsi.isdigit() or len(mmsi) > 12:
@@ -331,12 +351,23 @@ def vessel(mmsi: str):
     sc = SCORE.get(mmsi) or {}
     evs = [e for e in ENRICH["events"]
            if str(e.get("vessel_mmsi")) == mmsi or str(e.get("counterpart_mmsi")) == mmsi]
+    # same plain-words reasons as the attention rail -- a 96% score with
+    # "no behavioural flags" was a lie by omission
+    why = list(sc.get("reasons") or [])
+    if bool(sanc):
+        why = ["on an international sanctions list"] + why
+    elif (r.get("flag") or "") in FOC_FLAGS:
+        why.append(f"flag of convenience ({r.get('flag')})")
+    if r.get("ts"):
+        age = time.time() - r["ts"]
+        if LIVE_S < age <= DARK_S:
+            why = [f"WENT DARK {round(age / 60)}m ago, AIS lost"] + why
     return {
         "mmsi": mmsi, "imo": imo, "name": r.get("ship_name") or idn.get("shipname"),
         "flag": r.get("flag") or idn.get("flag"), "type": idn.get("ship_type"),
         "built_year": idn.get("built_year"), "gross_tonnage": idn.get("gross_tonnage"),
         "destination": r.get("destination"), "draught": r.get("draught"),
-        "score": sc.get("score"), "reasons": sc.get("reasons") or [],
+        "score": sc.get("score"), "reasons": why,
         "sanctioned": bool(sanc), "sanction": sanc,
         "events": [{"type": e.get("event_type"), "start": str(e.get("start_ts")),
                     "lat": e.get("lat"), "lon": e.get("lon"),
