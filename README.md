@@ -14,6 +14,8 @@ label is weak (open sanctions lists, by IMO), so the model catches vessels that
 **9.4x above a blind sanctions-list lookup** (ROC-AUC 0.92). The reveal is the
 **network**: the rings of vessels that keep meeting in the dark.
 
+![Ghost Fleet live map: vessels scored in real time, dark and sanctioned traffic flagged](assets/ui.png)
+
 ## The result
 
 `shadow_vessel`, a gradient-boosted classifier on `vessel_track_features`
