@@ -29,6 +29,11 @@ from ghost_features import FEATURE_COLUMNS  # noqa: E402
 
 MODEL_NAME = "shadow_vessel"
 MIN_POSITIVES = int(os.environ.get("MIN_POSITIVES", "12"))
+# Promote on ROC-AUC, not PR-AUC: at ~20 positives PR-AUC swings ~0.02+ between
+# runs (chases noise), ROC is far steadier. Require a real margin so we only
+# ship a genuine improvement, never churn the champion on CV noise.
+PROMOTE_METRIC = "cv_roc_auc"
+PROMOTE_MARGIN = float(os.environ.get("PROMOTE_MARGIN", "0.005"))
 SERVE_REQS = ["scikit-learn==1.5.2", "numpy==1.26.4", "pandas==2.2.2",
               "joblib==1.4.2", "scipy==1.13.1"]
 
@@ -186,9 +191,10 @@ def _register(proj, model, X, y, oof, metrics):
         f.write(card)
 
     existing = mr.get_models(MODEL_NAME)
-    champ = max([m.training_metrics.get("cv_pr_auc", 0) for m in existing], default=0) if existing else 0
-    if metrics["cv_pr_auc"] < champ:
-        print(f"challenger PR-AUC {metrics['cv_pr_auc']} < champion {champ}; not registering", flush=True)
+    champ = max([m.training_metrics.get(PROMOTE_METRIC, 0) for m in existing], default=0) if existing else 0
+    if existing and metrics[PROMOTE_METRIC] <= champ + PROMOTE_MARGIN:
+        print(f"challenger {PROMOTE_METRIC} {metrics[PROMOTE_METRIC]} does not beat "
+              f"champion {champ} by margin {PROMOTE_MARGIN}; not registering", flush=True)
         return
     m = mr.python.create_model(
         name=MODEL_NAME, metrics=metrics,
