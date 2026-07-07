@@ -33,7 +33,10 @@ def _find_artifacts():
             return c
     import hopsworks
     mr = hopsworks.login().get_model_registry()
-    model = max(mr.get_models("shadow_vessel"), key=lambda m: m.version)
+    models = mr.get_models("shadow_vessel")
+    if not models:
+        raise RuntimeError("no shadow_vessel model registered yet")
+    model = max(models, key=lambda m: m.version)
     d = model.download()
     if not os.path.exists(os.path.join(d, "ghost_features.py")):
         raise RuntimeError(f"extractor missing from registry download {d}")
@@ -43,7 +46,7 @@ def _find_artifacts():
 ART = _find_artifacts()
 sys.path.insert(0, ART)
 from ghost_features import (FEATURE_COLUMNS, FOC_FLAGS,  # noqa: E402
-                            featurize_vessel, reasons)
+                            ONDEMAND_COLUMNS, featurize_vessel, reasons)
 
 # encounter suspicion weights (a derived function of the two vessels, gated so a
 # benign meeting cannot flag on arithmetic -- the cascade n>=8 scar)
@@ -82,7 +85,9 @@ class Predict(object):
         flag = stored.get("flag") or ""
         if inst.get("track"):
             od = featurize_vessel(inst["track"])
-            for c in FEATURE_COLUMNS:                 # on-demand wins when fresher
+            # only AIS-behavioural cols; a bare track has no events/identity, so
+            # never let it clobber stored gfw_*/flag/age/tonnage signal.
+            for c in ONDEMAND_COLUMNS:                # on-demand wins when fresher
                 if od.get(c) not in (None, 0.0) or feats.get(c) in (None, ):
                     feats[c] = od[c]
         return feats, flag

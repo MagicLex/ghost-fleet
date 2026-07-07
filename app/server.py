@@ -48,6 +48,8 @@ STATIC = ROOT / "app" / "static"
 VESSELS = {}                       # mmsi -> latest row
 TRAILS = {}                        # mmsi -> deque[(lat,lon)]
 TRAIL_LEN = 120
+LIVE_S = 300                       # seen within this = live
+DARK_S = 3600                      # a suspicious vessel unseen up to this long = "went dark"
 SCORE = {}                         # mmsi -> {"score", "reasons", "flag"}
 ENRICH = {"sanctioned": {}, "identity": {}, "events": [], "at": 0.0}
 HEAT = {"corridor": [], "dark": [], "at": 0.0}
@@ -230,22 +232,31 @@ def static(name: str):
 @app.get("/api/state")
 def state():
     now = time.time()
-    out = []
+    out, dark = [], []
     for m, r in VESSELS.items():
-        if now - r["ts"] > 300:
+        age = now - r["ts"]
+        if age > DARK_S:
             continue
         sc = SCORE.get(m) or {}
         sanc = _sanctioned_row(r)
         foc = (r.get("flag") or "") in FOC_FLAGS
-        out.append({
+        s = sc.get("score")
+        rec = {
             "m": m, "n": (r.get("ship_name") or "")[:24], "im": r.get("imo") or "",
             "la": round(r["lat"], 4), "lo": round(r["lon"], 4),
             "sog": r.get("sog"), "cog": r.get("cog"), "fl": r.get("flag") or "",
-            "s": sc.get("score"), "sanc": 1 if sanc else 0, "foc": 1 if foc else 0,
-            "age": round(now - r["ts"], 1),
-        })
-    return {"t": now, "vessels": out, "watch": _watch(now),
-            "stats": {"tracked": len(out),
+            "s": s, "sanc": 1 if sanc else 0, "foc": 1 if foc else 0,
+            "age": round(age, 1),
+        }
+        if age <= LIVE_S:
+            out.append(rec)
+        elif sanc or foc or (s is not None and s >= 0.5):
+            # a SUSPICIOUS vessel that stopped transmitting is the whole thesis:
+            # keep it on the map as a ghost at its last known position
+            rec["dark_min"] = round(age / 60, 1)
+            dark.append(rec)
+    return {"t": now, "vessels": out, "dark": dark, "watch": _watch(now),
+            "stats": {"tracked": len(out), "dark": len(dark),
                       "scored": sum(1 for v in out if v["s"] is not None),
                       "sanctioned_live": sum(1 for v in out if v["sanc"]),
                       "msg_age": round(now - STATS["at"], 1) if STATS["at"] else None,
@@ -253,25 +264,34 @@ def state():
 
 
 def _watch(now):
-    """Ranked attention rail: sanctioned first, then high model score, plain words."""
+    """Ranked attention rail: a suspicious vessel going dark is the headline,
+    then sanctioned, then high model score, plain words."""
     w = []
     for m, r in VESSELS.items():
-        if now - r["ts"] > 300:
+        age = now - r["ts"]
+        if age > DARK_S:
             continue
         sc = SCORE.get(m) or {}
         s = sc.get("score") or 0
         sanc = _sanctioned_row(r)
+        foc = (r.get("flag") or "") in FOC_FLAGS
+        is_dark = age > LIVE_S
+        keep = (sanc or foc or s >= 0.5) if is_dark else (sanc or s >= 0.5)
+        if not keep:
+            continue
         why = list(sc.get("reasons") or [])
-        score = (1000 if sanc else 0) + 100 * s
+        score = (1000 if sanc else 0) + 100 * s + (500 if is_dark else 0)
+        if is_dark:
+            why = [f"WENT DARK {round(age / 60)}m ago, AIS lost"] + why
         if sanc:
             why = ["on an international sanctions list"] + why
-        elif (r.get("flag") or "") in FOC_FLAGS:
+        elif foc:
             why = why + [f"flag of convenience ({r.get('flag')})"]
-        if sanc or s >= 0.5:
-            w.append({"m": m, "n": (r.get("ship_name") or m)[:24],
-                      "la": round(r["lat"], 3), "lo": round(r["lon"], 3),
-                      "s": round(s, 3), "sanc": 1 if sanc else 0,
-                      "why": why[:3], "score": round(score, 1)})
+        w.append({"m": m, "n": (r.get("ship_name") or m)[:24],
+                  "la": round(r["lat"], 3), "lo": round(r["lon"], 3),
+                  "s": round(s, 3), "sanc": 1 if sanc else 0,
+                  "dark": 1 if is_dark else 0,
+                  "why": why[:3], "score": round(score, 1)})
     w.sort(key=lambda x: -x["score"])
     return w[:14]
 
@@ -284,7 +304,18 @@ def heatmap():
 
 @app.get("/api/network")
 def network():
-    return {"nodes": NETWORK["nodes"], "edges": NETWORK["edges"], "at": NETWORK["at"]}
+    nodes = []
+    for nd in NETWORK["nodes"]:
+        m = nd["mmsi"]
+        idn = ENRICH["identity"].get(m) or {}
+        r = VESSELS.get(m) or {}
+        sc = SCORE.get(m) or {}
+        nodes.append({**nd,
+                      "name": (r.get("ship_name") or idn.get("shipname") or "")[:24],
+                      "flag": r.get("flag") or idn.get("flag") or "",
+                      "imo": str(r.get("imo") or idn.get("imo") or ""),
+                      "score": sc.get("score")})
+    return {"nodes": nodes, "edges": NETWORK["edges"], "at": NETWORK["at"]}
 
 
 @app.get("/api/trail/{mmsi}")

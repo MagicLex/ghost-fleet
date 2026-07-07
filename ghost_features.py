@@ -180,6 +180,18 @@ FEATURE_COLUMNS = [
     "gross_tonnage", "is_tanker",
 ]
 
+# Columns the extractor can compute from a bare AIS track alone (no GFW events,
+# no registry identity). The serving on-demand fusion may ONLY overwrite these
+# from a live-track request; gfw_* and identity columns (n_flags, flag_is_foc,
+# age_years, gross_tonnage, is_tanker) must come from the precomputed store, or a
+# track that lacks them would erase real signal (e.g. flag-hopping).
+ONDEMAND_COLUMNS = [
+    "n_positions", "span_hours", "avg_sog", "p95_sog", "frac_slow",
+    "n_loiter", "loiter_hours", "draught_mean", "draught_std",
+    "n_draught_changes", "n_destinations", "n_destination_changes",
+    "frac_in_sts_hotspot", "max_recv_gap_hours",
+]
+
 SLOW_KT = 1.0          # under this = effectively stopped / loitering
 LOITER_MIN = 60.0      # a loiter episode = slow + offshore for this long
 
@@ -245,8 +257,8 @@ def featurize_vessel(positions, events=None, identity=None):
     f["n_flags"] = float(len(flags)) if flags else 1.0
     f["flag_is_foc"] = 1.0 if (flags & FOC_FLAGS) else 0.0
     by = idn.get("built_year")
-    if by:
-        f["age_years"] = max(0.0, float(idn.get("as_of_year", 2026)) - float(by))
+    if by and idn.get("as_of_year"):        # no guessed "now"; caller passes the year
+        f["age_years"] = max(0.0, float(idn["as_of_year"]) - float(by))
     f["gross_tonnage"] = float(idn.get("gross_tonnage") or 0.0)
     tg = idn.get("ship_type_group") or ship_type_group(_mode([r.get("ship_type") for r in pos]))
     f["is_tanker"] = 1.0 if tg == "tanker" else 0.0

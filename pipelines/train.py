@@ -34,19 +34,25 @@ SERVE_REQS = ["scikit-learn==1.5.2", "numpy==1.26.4", "pandas==2.2.2",
 
 
 def _feature_view(fs):
+    # get_feature_view RETURNS None for a missing FV in this SDK (does not raise),
+    # so a bare try/except-create silently returns None (BLOCKERS: sdk). Handle
+    # both the None-return and the raise, then create.
     try:
-        return fs.get_feature_view("shadow_vessel_fv", version=1)
+        fv = fs.get_feature_view("shadow_vessel_fv", version=1)
+        if fv is not None:
+            return fv
     except Exception:
-        vtf = fs.get_feature_group("vessel_track_features", version=1)
-        san = fs.get_feature_group("sanctioned_vessel", version=1)
-        q = vtf.select_all().join(san.select(["on_list"]), on=["imo"],
-                                  join_type="left")
-        fv = fs.create_feature_view(
-            name="shadow_vessel_fv", version=1, query=q, labels=["on_list"],
-            description="Vessel behaviour features labelled by sanctions-list "
-                        "presence (IMO join). y=1 shadow-fleet/sanctioned.")
-        print("created shadow_vessel_fv v1", flush=True)
-        return fv
+        pass
+    vtf = fs.get_feature_group("vessel_track_features", version=1)
+    san = fs.get_feature_group("sanctioned_vessel", version=1)
+    q = vtf.select_all().join(san.select(["on_list"]), on=["imo"],
+                              join_type="left")
+    fv = fs.create_feature_view(
+        name="shadow_vessel_fv", version=1, query=q, labels=["on_list"],
+        description="Vessel behaviour features labelled by sanctions-list "
+                    "presence (IMO join). y=1 shadow-fleet/sanctioned.")
+    print("created shadow_vessel_fv v1", flush=True)
+    return fv
 
 
 def main():
@@ -59,15 +65,11 @@ def main():
     fs = proj.get_feature_store()
     fv = _feature_view(fs)
 
-    df = fv.get_batch_data() if hasattr(fv, "get_batch_data") else None
-    # training_data path (features + labels)
-    X_all, y_all = fv.training_data() if df is None else (df, None)
-    if y_all is None:
-        # fv.training_data returns (df, labels_series) in this SDK
-        X_all, y_all = fv.training_data()
+    # training_data returns (features_df, labels_df) in this SDK
+    X_all, y_all = fv.training_data()
     df = X_all.copy()
     df["on_list"] = pd.to_numeric(
-        (y_all if not isinstance(y_all, pd.DataFrame) else y_all.iloc[:, 0]),
+        (y_all.iloc[:, 0] if isinstance(y_all, pd.DataFrame) else y_all),
         errors="coerce").fillna(0).astype(int).values
 
     n_pos = int(df["on_list"].sum())

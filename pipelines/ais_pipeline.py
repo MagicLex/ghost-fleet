@@ -33,11 +33,12 @@ for _p in [_here] + sorted(glob.glob("/hopsfs/Users/*/ghost-fleet")):
 from collect.ais_stream import stream_rows  # noqa: E402
 from ghost_features import POSITION_COLUMNS  # noqa: E402
 
-# run length: argv[1] (job --args) overrides env overrides default. Keep it
-# STRICTLY less than the cron interval so two executions never write at once
-# (concurrent writers corrupt the Delta table, the cascade scar).
-RUN_MINUTES = float((sys.argv[1] if len(sys.argv) > 1 else None)
-                    or os.environ.get("RUN_MINUTES", "45"))
+# run length in minutes: env ONLY. Never read sys.argv positionally -- Hopsworks
+# injects `-start_time`/`-end_time` into SCHEDULED executions, so float(argv[1])
+# crashed every cron fire while the manual (no-arg) run worked (BLOCKERS:
+# scheduled-arg). Keep STRICTLY less than the cron interval so two executions
+# never write at once (concurrent writers corrupt the Delta table, cascade scar).
+RUN_MINUTES = float(os.environ.get("RUN_MINUTES", "45"))
 FLUSH_SECONDS = 45.0
 FLUSH_ROWS = 4000
 

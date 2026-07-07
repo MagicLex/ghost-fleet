@@ -40,6 +40,9 @@ LOOKBACK_DAYS = int(os.environ.get("GFW_LOOKBACK_DAYS", "60"))
 MAX_VESSELS = int(os.environ.get("GFW_MAX_VESSELS", "500"))
 MAX_PAGES = int(os.environ.get("GFW_MAX_PAGES", "40"))
 THEATRES = [("baltic", BBOXES[0]), ("laconian", BBOXES[1])]
+# Wall-clock budget so an hourly job never laps its own cron. Under GFW throttling
+# the 500-vessel identity loop alone can run hours; bound it and write what we got.
+BUDGET_MIN = float(os.environ.get("GFW_BUDGET_MIN", "12"))
 
 
 def _polygon(box):
@@ -76,14 +79,17 @@ def _post(s, url, body, **kw):
     r.raise_for_status()
 
 
-def _fetch_events(s, start, end):
+def _fetch_events(s, start, end, deadline):
     rows, vessel_ids = [], set()
     for etype, ds in EVENT_DATASETS.items():
         for tag, box in THEATRES:
+            if time.time() > deadline:
+                print(f"event budget hit, stopping before {etype}/{tag}", flush=True)
+                return rows, vessel_ids
             body = {"datasets": [ds], "startDate": start, "endDate": end,
                     "geometry": _polygon(box)}
             offset, total, pages = 0, 1, 0
-            while offset < total and pages < MAX_PAGES:
+            while offset < total and pages < MAX_PAGES and time.time() <= deadline:
                 try:
                     d = _post(s, f"{BASE}/events?limit=100&offset={offset}", body)
                 except requests.HTTPError as e:
@@ -121,13 +127,16 @@ def _fetch_events(s, start, end):
     return rows, vessel_ids
 
 
-def _fetch_identity(s, vessel_ids):
+def _fetch_identity(s, vessel_ids, deadline):
     ids = sorted(vessel_ids)
     if len(ids) > MAX_VESSELS:
         print(f"capping identity calls at {MAX_VESSELS} of {len(ids)} vessels", flush=True)
         ids = ids[:MAX_VESSELS]
     out = {}
     for vid in ids:
+        if time.time() > deadline:
+            print(f"identity budget hit at {len(out)}/{len(ids)} vessels", flush=True)
+            break
         try:
             d = _get(s, f"{BASE}/vessels/{vid}",
                      params={"dataset": "public-global-vessel-identity:latest"})
@@ -178,9 +187,13 @@ def main():
 
     end = pd.Timestamp.utcnow().strftime("%Y-%m-%d")
     start = (pd.Timestamp.utcnow() - pd.Timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    print(f"GFW events {start}..{end}", flush=True)
-    events, vessel_ids = _fetch_events(s, start, end)
-    identities = _fetch_identity(s, vessel_ids)
+    print(f"GFW events {start}..{end} (budget {BUDGET_MIN:.0f} min)", flush=True)
+    t0 = time.time()
+    budget_s = BUDGET_MIN * 60
+    # events get ~40% of the budget; the rest is guaranteed for identity
+    # (mmsi->imo, which grows the sanctions-label join) so neither leg starves.
+    events, vessel_ids = _fetch_events(s, start, end, t0 + budget_s * 0.4)
+    identities = _fetch_identity(s, vessel_ids, t0 + budget_s)
     print(f"events={len(events)} vessels={len(identities)}", flush=True)
 
     fs = proj.get_feature_store()
